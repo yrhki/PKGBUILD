@@ -1,0 +1,933 @@
+From fe6a1a500b66829dc624059708c0ab5b7f416fff Mon Sep 17 00:00:00 2001
+From: columbarius <co1umbarius@protonmail.com>
+Date: Wed, 30 Dec 2020 18:30:40 +0100
+Subject: [PATCH 1/4] Add support for config file
+
+---
+ .builds/alpine.yml          |   1 +
+ .builds/archlinux.yml       |   1 +
+ .builds/freebsd.yml         |   1 +
+ contrib/config.sample       |   2 +
+ include/config.h            |  18 ++++++
+ include/screencast_common.h |   3 -
+ include/xdpw.h              |   4 +-
+ meson.build                 |   7 +++
+ src/core/config.c           | 109 ++++++++++++++++++++++++++++++++++++
+ src/core/main.c             |  19 +++++--
+ src/screencast/screencast.c |   8 +--
+ 11 files changed, 161 insertions(+), 12 deletions(-)
+ create mode 100644 contrib/config.sample
+ create mode 100644 include/config.h
+ create mode 100644 src/core/config.c
+
+diff --git a/.builds/alpine.yml b/.builds/alpine.yml
+index b6424ec..0308f2e 100644
+--- a/.builds/alpine.yml
++++ b/.builds/alpine.yml
+@@ -6,6 +6,7 @@ packages:
+   - pipewire-dev
+   - wayland-dev
+   - wayland-protocols
++  - iniparser-dev
+ sources:
+   - https://github.com/emersion/xdg-desktop-portal-wlr
+ tasks:
+diff --git a/.builds/archlinux.yml b/.builds/archlinux.yml
+index 5e8bff3..94bb601 100644
+--- a/.builds/archlinux.yml
++++ b/.builds/archlinux.yml
+@@ -6,6 +6,7 @@ packages:
+   - wayland
+   - wayland-protocols
+   - pipewire
++  - iniparser
+ sources:
+   - https://github.com/emersion/xdg-desktop-portal-wlr
+ tasks:
+diff --git a/.builds/freebsd.yml b/.builds/freebsd.yml
+index 9e693cb..0eda101 100644
+--- a/.builds/freebsd.yml
++++ b/.builds/freebsd.yml
+@@ -6,6 +6,7 @@ packages:
+   - pkgconf
+   - wayland
+   - wayland-protocols
++  - iniparser
+ sources:
+   - https://github.com/emersion/xdg-desktop-portal-wlr
+ tasks:
+diff --git a/contrib/config.sample b/contrib/config.sample
+new file mode 100644
+index 0000000..5daea46
+--- /dev/null
++++ b/contrib/config.sample
+@@ -0,0 +1,2 @@
++[screencast]
++output=
+diff --git a/include/config.h b/include/config.h
+new file mode 100644
+index 0000000..a2e7962
+--- /dev/null
++++ b/include/config.h
+@@ -0,0 +1,18 @@
++#ifndef CONFIG_H
++#define CONFIG_H
++
++#include "logger.h"
++
++struct config_screencast {
++	char *output_name;
++};
++
++struct xdpw_config {
++	struct config_screencast screencast_conf;
++};
++
++void print_config(enum LOGLEVEL loglevel, struct xdpw_config *config);
++void finish_config(struct xdpw_config *config);
++void init_config(char *configfile, struct xdpw_config *config);
++
++#endif
+diff --git a/include/screencast_common.h b/include/screencast_common.h
+index 0724bd1..4aea195 100644
+--- a/include/screencast_common.h
++++ b/include/screencast_common.h
+@@ -57,9 +57,6 @@ struct xdpw_screencast_context {
+ 	struct zxdg_output_manager_v1* xdg_output_manager;
+ 	struct wl_shm *shm;
+ 
+-	// cli options
+-	const char *output_name;
+-
+ 	// sessions
+ 	struct wl_list screencast_instances;
+ };
+diff --git a/include/xdpw.h b/include/xdpw.h
+index 2d556d7..eeb81e7 100644
+--- a/include/xdpw.h
++++ b/include/xdpw.h
+@@ -11,6 +11,7 @@
+ #endif
+ 
+ #include "screencast_common.h"
++#include "config.h"
+ 
+ struct xdpw_state {
+ 	struct wl_list xdpw_sessions;
+@@ -21,6 +22,7 @@ struct xdpw_state {
+ 	uint32_t screencast_source_types; // bitfield of enum source_types
+ 	uint32_t screencast_cursor_modes; // bitfield of enum cursor_modes
+ 	uint32_t screencast_version;
++	struct xdpw_config *config;
+ };
+ 
+ struct xdpw_request {
+@@ -41,7 +43,7 @@ enum {
+ };
+ 
+ int xdpw_screenshot_init(struct xdpw_state *state);
+-int xdpw_screencast_init(struct xdpw_state *state, const char *output_name);
++int xdpw_screencast_init(struct xdpw_state *state);
+ 
+ struct xdpw_request *xdpw_request_create(sd_bus *bus, const char *object_path);
+ void xdpw_request_destroy(struct xdpw_request *req);
+diff --git a/meson.build b/meson.build
+index e1d5e3c..2bd47a6 100644
+--- a/meson.build
++++ b/meson.build
+@@ -20,12 +20,17 @@ add_project_arguments(cc.get_supported_arguments([
+ 	'-D_POSIX_C_SOURCE=200809L',
+ ]), language: 'c')
+ 
++prefix = get_option('prefix')
++sysconfdir = get_option('sysconfdir')
++add_project_arguments('-DSYSCONFDIR="@0@"'.format(join_paths(prefix, sysconfdir)), language : 'c')
++
+ inc = include_directories('include')
+ 
+ rt = cc.find_library('rt')
+ pipewire = dependency('libpipewire-0.3', version: '>= 0.3.2')
+ wayland_client = dependency('wayland-client')
+ wayland_protos = dependency('wayland-protocols', version: '>=1.14')
++iniparser = cc.find_library('iniparser')
+ 
+ if get_option('sd-bus-provider') == 'auto'
+ 	assert(get_option('auto_features').auto(), 'sd-bus-provider must not be set to auto since auto_features != auto')
+@@ -59,6 +64,7 @@ executable(
+ 	files([
+ 		'src/core/main.c',
+ 		'src/core/logger.c',
++		'src/core/config.c',
+ 		'src/core/request.c',
+ 		'src/core/session.c',
+ 		'src/screenshot/screenshot.c',
+@@ -73,6 +79,7 @@ executable(
+ 		sdbus,
+ 		pipewire,
+ 		rt,
++		iniparser,
+ 	],
+ 	include_directories: [inc],
+ 	install: true,
+diff --git a/src/core/config.c b/src/core/config.c
+new file mode 100644
+index 0000000..198af0e
+--- /dev/null
++++ b/src/core/config.c
+@@ -0,0 +1,109 @@
++#include "config.h"
++#include "xdpw.h"
++#include "logger.h"
++
++#include <dictionary.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <iniparser.h>
++
++void print_config(enum LOGLEVEL loglevel, struct xdpw_config *config) {
++	logprint(loglevel, "config: Outputname  %s",config->screencast_conf.output_name);
++}
++
++// NOTE: calling finish_config won't prepare the config to be read again from config file
++// with init_config since to pointers and other values won't be reset to NULL, or 0
++void finish_config(struct xdpw_config *config) {
++	logprint(DEBUG, "config: destroying config");
++
++	// screencast
++	free(&config->screencast_conf.output_name);
++}
++
++static void getstring_from_conffile(dictionary *d, char *key, char **dest, char *fallback) {
++	if (*dest != NULL) {
++		return;
++	}
++	const char *c = iniparser_getstring(d, key, fallback);
++	if (c == NULL) {
++		return;
++	}
++	// Allow keys without value as default
++	if (strcmp(c, "") != 0) {
++		*dest = strdup(c);
++	} else {
++		*dest = fallback ? strdup(fallback) : NULL;
++	}
++}
++
++static bool file_exists(const char *path) {
++	return path && access(path, R_OK) != -1;
++}
++
++static char *config_path(char *prefix, char *filename) {
++	if (!prefix || !prefix[0] || !filename || !filename[0]) {
++		return NULL;
++	}
++
++	char *config_folder = "xdg-desktop-portal-wlr";
++
++	size_t size = 3 + strlen(prefix) + strlen(config_folder) + strlen(filename);
++	char *path = calloc(size, sizeof(char));
++	snprintf(path, size, "%s/%s/%s", prefix, config_folder, filename);
++	return path;
++}
++
++static void config_parse_file(char *configfile, struct xdpw_config *config) {
++	dictionary *d = iniparser_load(configfile);
++
++	// screencast
++	getstring_from_conffile(d, "screencast:output_name", &config->screencast_conf.output_name, NULL);
++
++	iniparser_freedict(d);
++	logprint(DEBUG, "config: config file parsed");
++	print_config(DEBUG, config);
++}
++
++static char *get_config_path(void) {
++	const char *home = getenv("HOME");
++	size_t size_fallback = 1 + strlen(home) + strlen("/.config");
++	char *config_home_fallback = calloc(size_fallback, sizeof(char));
++	snprintf(config_home_fallback, size_fallback, "%s/.config", home);
++
++	char *prefix[4];
++	prefix[0] = getenv("XDG_CONFIG_HOME");
++	prefix[1] = config_home_fallback;
++	prefix[2] = SYSCONFDIR "/xdg";
++	prefix[3] = SYSCONFDIR;
++
++	char *config[2];
++	config[0] = getenv("XDG_CURRENT_DESKTOP");
++	config[1] = "config";
++
++	for (size_t i = 0; i < 4; i++) {
++		for (size_t j = 0; j < 2; j++) {
++			char *path = config_path(prefix[i], config[j]);
++			if (!path) {
++				continue;
++			}
++			logprint(TRACE, "config: trying config file %s", path);
++			if (file_exists(path)) {
++				return path;
++			}
++			free(path);
++		}
++	}
++
++	return NULL;
++}
++
++void init_config(char *configfile, struct xdpw_config *config) {
++	if (configfile == NULL) {
++		configfile = get_config_path();
++	}
++
++	logprint(INFO, "config: using config file %s", configfile);
++	config_parse_file(configfile, config);
++}
+diff --git a/src/core/main.c b/src/core/main.c
+index 5d16449..860a561 100644
+--- a/src/core/main.c
++++ b/src/core/main.c
+@@ -24,6 +24,8 @@ static int xdpw_usage(FILE* stream, int rc) {
+ 		"                                     QUIET, ERROR, WARN, INFO, DEBUG, TRACE\n"
+ 		"    -o, --output=<name>              Select output to capture.\n"
+ 		"                                     metadata (performs no conversion).\n"
++		"    -c, --config=<config file>	      Select config file.\n"
++		"                                     (default is $XDG_CONFIG_HOME/xdg-desktop-portal-wlr/config)\n"
+ 		"    -r, --replace                    Replace a running instance.\n"
+ 		"    -h, --help                       Get help (this text).\n"
+ 		"\n";
+@@ -39,14 +41,16 @@ static int handle_name_lost(sd_bus_message *m, void *userdata, sd_bus_error *ret
+ }
+ 
+ int main(int argc, char *argv[]) {
+-	const char* output_name = NULL;
++	struct xdpw_config config = {0};
++	char *configfile = NULL;
+ 	enum LOGLEVEL loglevel = ERROR;
+ 	bool replace = false;
+ 
+-	static const char* shortopts = "l:o:rh";
++	static const char* shortopts = "l:o:c:rh";
+ 	static const struct option longopts[] = {
+ 		{ "loglevel", required_argument, NULL, 'l' },
+ 		{ "output", required_argument, NULL, 'o' },
++		{ "config", required_argument, NULL, 'c' },
+ 		{ "replace", no_argument, NULL, 'r' },
+ 		{ "help", no_argument, NULL, 'h' },
+ 		{ NULL, 0, NULL, 0 }
+@@ -62,7 +66,10 @@ int main(int argc, char *argv[]) {
+ 			loglevel = get_loglevel(optarg);
+ 			break;
+ 		case 'o':
+-			output_name = optarg;
++			config.screencast_conf.output_name = strdup(optarg);
++			break;
++		case 'c':
++			configfile = strdup(optarg);
+ 			break;
+ 		case 'r':
+ 			replace = true;
+@@ -75,6 +82,7 @@ int main(int argc, char *argv[]) {
+ 	}
+ 
+ 	init_logger(stderr, loglevel);
++	init_config(configfile, &config);
+ 
+ 	int ret = 0;
+ 
+@@ -111,12 +119,13 @@ int main(int argc, char *argv[]) {
+ 		.screencast_source_types = MONITOR,
+ 		.screencast_cursor_modes = HIDDEN | EMBEDDED,
+ 		.screencast_version = XDP_CAST_PROTO_VER,
++		.config = &config,
+ 	};
+ 
+ 	wl_list_init(&state.xdpw_sessions);
+ 
+ 	xdpw_screenshot_init(&state);
+-	ret = xdpw_screencast_init(&state, output_name);
++	ret = xdpw_screencast_init(&state);
+ 	if (ret < 0) {
+ 		logprint(ERROR, "xdpw: failed to initialize screencast");
+ 		goto error;
+@@ -217,6 +226,8 @@ int main(int argc, char *argv[]) {
+ 	}
+ 
+ 	// TODO: cleanup
++	finish_config(&config);
++	free(configfile);
+ 
+ 	return EXIT_SUCCESS;
+ 
+diff --git a/src/screencast/screencast.c b/src/screencast/screencast.c
+index 05ffd3f..e4be866 100644
+--- a/src/screencast/screencast.c
++++ b/src/screencast/screencast.c
+@@ -48,8 +48,9 @@ int setup_outputs(struct xdpw_screencast_context *ctx, struct xdpw_session *sess
+ 	}
+ 
+ 	struct xdpw_wlr_output *out;
+-	if (ctx->output_name) {
+-		out = xdpw_wlr_output_find_by_name(&ctx->output_list, ctx->output_name);
++	if (ctx->state->config->screencast_conf.output_name) {
++		out = xdpw_wlr_output_find_by_name(&ctx->output_list,
++				ctx->state->config->screencast_conf.output_name);
+ 		if (!out) {
+ 			logprint(ERROR, "wlroots: no such output");
+ 			abort();
+@@ -434,12 +435,11 @@ static const sd_bus_vtable screencast_vtable[] = {
+ 	SD_BUS_VTABLE_END
+ };
+ 
+-int xdpw_screencast_init(struct xdpw_state *state, const char *output_name) {
++int xdpw_screencast_init(struct xdpw_state *state) {
+ 	sd_bus_slot *slot = NULL;
+ 
+ 	state->screencast = (struct xdpw_screencast_context) { 0 };
+ 	state->screencast.state = state;
+-	state->screencast.output_name = output_name;
+ 
+ 	int err;
+ 	err = xdpw_pwr_core_connect(state);
+
+From 815e69313d7196f92aa2f70345354de5db96e010 Mon Sep 17 00:00:00 2001
+From: columbarius <co1umbarius@protonmail.com>
+Date: Tue, 9 Feb 2021 03:11:18 +0100
+Subject: [PATCH 2/4] logger: hardcode loglevels and add DEFAULT_LOGLEVEL makro
+
+---
+ include/logger.h  |  2 ++
+ src/core/logger.c | 51 +++++++++++++++++++++++++++++++----------------
+ src/core/main.c   |  2 +-
+ 3 files changed, 37 insertions(+), 18 deletions(-)
+
+diff --git a/include/logger.h b/include/logger.h
+index 3a7e13f..89a2cb3 100644
+--- a/include/logger.h
++++ b/include/logger.h
+@@ -3,6 +3,8 @@
+ 
+ #include <stdio.h>
+ 
++#define DEFAULT_LOGLEVEL ERROR
++
+ enum LOGLEVEL { QUIET, ERROR, WARN, INFO, DEBUG, TRACE };
+ 
+ struct logger_properties {
+diff --git a/src/core/logger.c b/src/core/logger.c
+index fa0d7b1..072ebcf 100644
+--- a/src/core/logger.c
++++ b/src/core/logger.c
+@@ -5,17 +5,6 @@
+ #include <string.h>
+ #include <time.h>
+ 
+-static int NUM_LEVELS = 6;
+-
+-static const char *loglevels[] = {
+-	"QUIET",
+-	"ERROR",
+-	"WARN",
+-	"INFO",
+-	"DEBUG",
+-	"TRACE"
+-};
+-
+ static struct logger_properties logprops;
+ 
+ void init_logger(FILE *dst, enum LOGLEVEL level) {
+@@ -24,16 +13,44 @@ void init_logger(FILE *dst, enum LOGLEVEL level) {
+ }
+ 
+ enum LOGLEVEL get_loglevel(const char *level) {
+-	int i;
+-	for (i = 0; i < NUM_LEVELS; i++) {
+-		if (!strcmp(level, loglevels[i])) {
+-			return (enum LOGLEVEL) i;
+-		}
++	if (strcmp(level, "QUIET") == 0) {
++		return QUIET;
++	} else if (strcmp(level, "ERROR") == 0) {
++		return ERROR;
++	} else if (strcmp(level, "WARN") == 0) {
++		return WARN;
++	} else if (strcmp(level, "INFO") == 0) {
++		return INFO;
++	} else if (strcmp(level, "DEBUG") == 0) {
++		return DEBUG;
++	} else if (strcmp(level, "TRACE") == 0) {
++		return TRACE;
+ 	}
++
+ 	fprintf(stderr, "Could not understand log level %s\n", level);
+ 	abort();
+ }
+ 
++char *print_loglevel(enum LOGLEVEL loglevel) {
++	switch (loglevel) {
++	case QUIET:
++		return "QUIET";
++	case ERROR:
++		return "ERROR";
++	case WARN:
++		return "WARN";
++	case INFO:
++		return "INFO";
++	case DEBUG:
++		return "DEBUG";
++	case TRACE:
++		return "TRACE";
++	}
++	fprintf(stderr, "Could not find log level %d\n", loglevel);
++	abort();
++	return NULL;
++}
++
+ void logprint(enum LOGLEVEL level, char *msg, ...) {
+ 	if (!logprops.dst) {
+ 		fprintf(stderr, "Logger has been called, but was not initialized\n");
+@@ -56,7 +73,7 @@ void logprint(enum LOGLEVEL level, char *msg, ...) {
+ 
+ 	fprintf(logprops.dst, "%s", timestr);
+ 	fprintf(logprops.dst, " ");
+-	fprintf(logprops.dst, "[%s]", loglevels[level]);
++	fprintf(logprops.dst, "[%s]", print_loglevel(level));
+ 	fprintf(logprops.dst, " - ");
+ 
+ 	va_start(args, msg);
+diff --git a/src/core/main.c b/src/core/main.c
+index 860a561..8ae40f0 100644
+--- a/src/core/main.c
++++ b/src/core/main.c
+@@ -43,7 +43,7 @@ static int handle_name_lost(sd_bus_message *m, void *userdata, sd_bus_error *ret
+ int main(int argc, char *argv[]) {
+ 	struct xdpw_config config = {0};
+ 	char *configfile = NULL;
+-	enum LOGLEVEL loglevel = ERROR;
++	enum LOGLEVEL loglevel = DEFAULT_LOGLEVEL;
+ 	bool replace = false;
+ 
+ 	static const char* shortopts = "l:o:c:rh";
+
+From 596956aed57cad8a76150e69e837c7fa9a3a08fa Mon Sep 17 00:00:00 2001
+From: columbarius <co1umbarius@protonmail.com>
+Date: Thu, 11 Feb 2021 23:18:08 +0100
+Subject: [PATCH 3/4] build: add library path workaround for freebsd
+
+---
+ meson.build | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/meson.build b/meson.build
+index 2bd47a6..fd242f5 100644
+--- a/meson.build
++++ b/meson.build
+@@ -30,7 +30,7 @@ rt = cc.find_library('rt')
+ pipewire = dependency('libpipewire-0.3', version: '>= 0.3.2')
+ wayland_client = dependency('wayland-client')
+ wayland_protos = dependency('wayland-protocols', version: '>=1.14')
+-iniparser = cc.find_library('iniparser')
++iniparser = cc.find_library('iniparser', dirs: [join_paths(get_option('prefix'),get_option('libdir'))])
+ 
+ if get_option('sd-bus-provider') == 'auto'
+ 	assert(get_option('auto_features').auto(), 'sd-bus-provider must not be set to auto since auto_features != auto')
+
+From d0179d30228e40601e6b26833718e152a4de5bb6 Mon Sep 17 00:00:00 2001
+From: columbarius <co1umbarius@protonmail.com>
+Date: Sat, 10 Oct 2020 16:20:06 +0200
+Subject: [PATCH 4/4] screencast: add outputchooser with config option
+
+Supports "dmenu" chooser type, which is called with a dmenu type list
+piped to stdin and "simple" type, which recieves nothing on stdin.
+Choosers are required to return the name of the choosen output as given
+by the xdg-output protocol.
+
+Thanks to piater for closing overlooked pipes.
+---
+ contrib/config.sample              |   2 +
+ include/config.h                   |   3 +
+ include/screencast_common.h        |  13 +++
+ include/wlr_screencast.h           |   1 +
+ src/core/config.c                  |  10 +-
+ src/screencast/screencast.c        |  31 ++----
+ src/screencast/screencast_common.c |  26 +++++
+ src/screencast/wlr_screencast.c    | 170 +++++++++++++++++++++++++++++
+ 8 files changed, 236 insertions(+), 20 deletions(-)
+
+diff --git a/contrib/config.sample b/contrib/config.sample
+index 5daea46..48250e0 100644
+--- a/contrib/config.sample
++++ b/contrib/config.sample
+@@ -1,2 +1,4 @@
+ [screencast]
+ output=
++chooser_cmd="slurp -f %o -o"
++chooser_type=simple
+diff --git a/include/config.h b/include/config.h
+index a2e7962..ae7f499 100644
+--- a/include/config.h
++++ b/include/config.h
+@@ -2,9 +2,12 @@
+ #define CONFIG_H
+ 
+ #include "logger.h"
++#include "screencast_common.h"
+ 
+ struct config_screencast {
+ 	char *output_name;
++	char *chooser_cmd;
++	enum xdpw_chooser_types chooser_type;
+ };
+ 
+ struct xdpw_config {
+diff --git a/include/screencast_common.h b/include/screencast_common.h
+index 4aea195..433c8bb 100644
+--- a/include/screencast_common.h
++++ b/include/screencast_common.h
+@@ -20,6 +20,17 @@ enum source_types {
+   WINDOW = 2,
+ };
+ 
++enum xdpw_chooser_types {
++  XDPW_CHOOSER_NONE,
++  XDPW_CHOOSER_SIMPLE,
++  XDPW_CHOOSER_DMENU,
++};
++
++struct xdpw_output_chooser {
++	enum xdpw_chooser_types type;
++	char *cmd;
++};
++
+ struct xdpw_frame_damage {
+ 	uint32_t x;
+ 	uint32_t y;
+@@ -108,4 +119,6 @@ enum spa_video_format xdpw_format_pw_from_wl_shm(
+ 	struct xdpw_screencast_instance *cast);
+ enum spa_video_format xdpw_format_pw_strip_alpha(enum spa_video_format format);
+ 
++enum xdpw_chooser_types get_chooser_type(const char *chooser_type);
++char *print_chooser_type(enum xdpw_chooser_types chooser_type);
+ #endif /* SCREENCAST_COMMON_H */
+diff --git a/include/wlr_screencast.h b/include/wlr_screencast.h
+index 09cbe84..a1585bc 100644
+--- a/include/wlr_screencast.h
++++ b/include/wlr_screencast.h
+@@ -22,6 +22,7 @@ struct xdpw_wlr_output *xdpw_wlr_output_find_by_name(struct wl_list *output_list
+ struct xdpw_wlr_output *xdpw_wlr_output_first(struct wl_list *output_list);
+ struct xdpw_wlr_output *xdpw_wlr_output_find(struct xdpw_screencast_context *ctx,
+ 	struct wl_output *out, uint32_t id);
++struct xdpw_wlr_output *xdpw_wlr_output_chooser(struct xdpw_screencast_context *ctx);
+ 
+ void xdpw_wlr_frame_free(struct xdpw_screencast_instance *cast);
+ void xdpw_wlr_register_cb(struct xdpw_screencast_instance *cast);
+diff --git a/src/core/config.c b/src/core/config.c
+index 198af0e..67f38a1 100644
+--- a/src/core/config.c
++++ b/src/core/config.c
+@@ -1,6 +1,7 @@
+ #include "config.h"
+ #include "xdpw.h"
+ #include "logger.h"
++#include "screencast_common.h"
+ 
+ #include <dictionary.h>
+ #include <stdio.h>
+@@ -10,7 +11,9 @@
+ #include <iniparser.h>
+ 
+ void print_config(enum LOGLEVEL loglevel, struct xdpw_config *config) {
+-	logprint(loglevel, "config: Outputname  %s",config->screencast_conf.output_name);
++	logprint(loglevel, "config: Outputname  %s", config->screencast_conf.output_name);
++	logprint(loglevel, "Chooser_Cmd: %s\n", config->screencast_conf.chooser_cmd);
++	logprint(loglevel, "Chooser_Type: %s\n", print_chooser_type(config->screencast_conf.chooser_type));
+ }
+ 
+ // NOTE: calling finish_config won't prepare the config to be read again from config file
+@@ -60,6 +63,11 @@ static void config_parse_file(char *configfile, struct xdpw_config *config) {
+ 
+ 	// screencast
+ 	getstring_from_conffile(d, "screencast:output_name", &config->screencast_conf.output_name, NULL);
++	getstring_from_conffile(d, "screencast:chooser_cmd", &config->screencast_conf.chooser_cmd, NULL);
++	char *chooser_type = NULL;
++	getstring_from_conffile(d, "screencast:chooser_type", &chooser_type, "none");
++	config->screencast_conf.chooser_type = get_chooser_type(chooser_type);
++	free(chooser_type);
+ 
+ 	iniparser_freedict(d);
+ 	logprint(DEBUG, "config: config file parsed");
+diff --git a/src/screencast/screencast.c b/src/screencast/screencast.c
+index e4be866..e541189 100644
+--- a/src/screencast/screencast.c
++++ b/src/screencast/screencast.c
+@@ -48,19 +48,10 @@ int setup_outputs(struct xdpw_screencast_context *ctx, struct xdpw_session *sess
+ 	}
+ 
+ 	struct xdpw_wlr_output *out;
+-	if (ctx->state->config->screencast_conf.output_name) {
+-		out = xdpw_wlr_output_find_by_name(&ctx->output_list,
+-				ctx->state->config->screencast_conf.output_name);
+-		if (!out) {
+-			logprint(ERROR, "wlroots: no such output");
+-			abort();
+-		}
+-	} else {
+-		out = xdpw_wlr_output_first(&ctx->output_list);
+-		if (!out) {
+-			logprint(ERROR, "wlroots: no output found");
+-			abort();
+-		}
++	out = xdpw_wlr_output_chooser(ctx);
++	if (!out) {
++		logprint(ERROR, "wlroots: no output found");
++		return 1;
+ 	}
+ 
+ 	struct xdpw_screencast_instance *cast, *tmp_c;
+@@ -272,22 +263,24 @@ static int method_screencast_select_sources(sd_bus_message *msg, void *data,
+ 		return ret;
+ 	}
+ 
+-	ret = -1;
++	int output_selection_canceled = 1;
+ 	wl_list_for_each_reverse_safe(sess, tmp_s, &state->xdpw_sessions, link) {
+ 		if (strcmp(sess->session_handle, session_handle) == 0) {
+ 				logprint(DEBUG, "dbus: select sources: found matching session %s", sess->session_handle);
+-				ret = setup_outputs(ctx, sess, cursor_embedded);
++				output_selection_canceled = setup_outputs(ctx, sess, cursor_embedded);
+ 		}
+ 	}
+-	if (ret < 0) {
+-		return ret;
+-	}
+ 
++	ret = -1;
+ 	ret = sd_bus_message_new_method_return(msg, &reply);
+ 	if (ret < 0) {
+ 		return ret;
+ 	}
+-	ret = sd_bus_message_append(reply, "ua{sv}", PORTAL_RESPONSE_SUCCESS, 0);
++	if (output_selection_canceled == 1) {
++		ret = sd_bus_message_append(reply, "ua{sv}", PORTAL_RESPONSE_CANCELLED, 0);
++	} else {
++		ret = sd_bus_message_append(reply, "ua{sv}", PORTAL_RESPONSE_SUCCESS, 0);
++	}
+ 	if (ret < 0) {
+ 		return ret;
+ 	}
+diff --git a/src/screencast/screencast_common.c b/src/screencast/screencast_common.c
+index f185ad7..55afcc9 100644
+--- a/src/screencast/screencast_common.c
++++ b/src/screencast/screencast_common.c
+@@ -52,3 +52,29 @@ enum spa_video_format xdpw_format_pw_strip_alpha(enum spa_video_format format) {
+ 		return SPA_VIDEO_FORMAT_UNKNOWN;
+ 	}
+ }
++
++enum xdpw_chooser_types get_chooser_type(const char *chooser_type) {
++	if (strcmp(chooser_type, "none") == 0) {
++		return XDPW_CHOOSER_NONE;
++	} else if (strcmp(chooser_type, "simple") == 0) {
++		return XDPW_CHOOSER_SIMPLE;
++	} else if (strcmp(chooser_type, "dmenu") == 0) {
++		return XDPW_CHOOSER_DMENU;
++	}
++	fprintf(stderr, "Could not understand chooser type %s\n", chooser_type);
++	abort();
++}
++
++char *print_chooser_type(enum xdpw_chooser_types chooser_type) {
++	switch (chooser_type) {
++	case XDPW_CHOOSER_NONE:
++		return "none";
++	case XDPW_CHOOSER_SIMPLE:
++		return "simple";
++	case XDPW_CHOOSER_DMENU:
++		return "dmenu";
++	}
++	fprintf(stderr, "Could not find chooser type %d\n", chooser_type);
++	abort();
++	return NULL;
++}
+diff --git a/src/screencast/wlr_screencast.c b/src/screencast/wlr_screencast.c
+index dcb35c6..77ddfc4 100644
+--- a/src/screencast/wlr_screencast.c
++++ b/src/screencast/wlr_screencast.c
+@@ -311,6 +311,176 @@ struct xdpw_wlr_output *xdpw_wlr_output_first(struct wl_list *output_list) {
+ 	return NULL;
+ }
+ 
++static bool exec_chooser(char *cmd, bool readin, int p1[2], int p2[2]) {
++	logprint(TRACE, "exec chooser called: cmd %s, readin %d, pipe1 (%d,%d), pipe2 (%d,%d)", cmd, readin, p1[0], p1[1], p2[0], p2[1]);
++	pid_t pid = fork();
++
++	if (pid < 0) {
++		perror("fork");
++		return false;
++	} else if (pid == 0) {
++		close(p2[0]);
++
++		if (readin) {
++			dup2(p1[0], STDIN_FILENO);
++		}
++		dup2(p2[1], STDOUT_FILENO);
++		close(p1[0]);
++		close(p2[1]);
++
++		int err;
++		err = execl("/bin/sh", "/bin/sh", "-c", cmd, (void *)NULL);
++
++		if (err == -1) {
++			perror("execl");
++			logprint(WARN, "Failed to execute %s", cmd);
++			return false;
++		}
++		exit(127);
++	}
++
++	close(p1[0]);
++	close(p2[1]);
++
++	wait(NULL);
++
++	return true;
++}
++
++struct xdpw_wlr_output *wlr_output_chooser(struct xdpw_output_chooser *chooser, struct wl_list *output_list) {
++	logprint(DEBUG, "wlroots: output chooser called");
++	struct xdpw_wlr_output *output, *tmp;
++	size_t namelength = 0;
++	char *name = NULL;
++	bool readin = false;
++	FILE *f = NULL;
++
++	int p1[2]; //p -> c
++	int p2[2]; //c -> p
++
++	if (pipe(p1) == -1) {
++		perror("pipe1");
++		logprint(ERROR, "Failed to open pipe1");
++		return NULL;
++	}
++	if (pipe(p2) == -1) {
++		perror("pipe2");
++		logprint(ERROR, "Failed to open pipe2");
++		close(p1[0]);
++		close(p1[1]);
++		return NULL;
++	}
++
++	if (chooser->type == XDPW_CHOOSER_DMENU) {
++		f = fdopen(p1[1], "w");
++		if (f == 0) {
++			perror("fdopen pipe1");
++			logprint(ERROR, "Failed to open pipe1 for writing");
++			close(p1[0]);
++			close(p1[1]);
++			close(p2[0]);
++			close(p2[1]);
++			return NULL;
++		}
++		struct xdpw_wlr_output *output, *tmp;
++		wl_list_for_each_safe(output, tmp, output_list, link) {
++			fprintf(f, "%s\n", output->name);
++		}
++		fclose(f);
++		readin = true;
++	}
++	else {
++		close(p1[1]);
++	}
++
++
++	if (exec_chooser(chooser->cmd, readin, p1, p2)) {
++		f = fdopen(p2[0], "r");
++		if (f == 0) {
++			perror("fdopen pipe2");
++			logprint(ERROR, "Failed to open pipe2 for reading");
++			close(p2[0]);
++			return NULL;
++		}
++		ssize_t nread = getline(&name, &namelength, f);
++		if (nread < 0) {
++			perror("getline failed");
++			fclose(f);
++			return NULL;
++		}
++		fclose(f);
++
++		//Strip newline
++		char *p = strchr(name, '\n');
++		if (p != NULL) {
++			*p = '\0';
++		}
++
++		logprint(TRACE, "wlroots: output chooser %s selects output %s", chooser->cmd, name);
++		wl_list_for_each_safe(output, tmp, output_list, link) {
++			if (strcmp(output->name, name) == 0) {
++				free(name);
++				return output;
++			}
++		}
++	}
++	else {
++		close(p2[0]);
++	}
++
++	free(name);
++	return NULL;
++}
++
++struct xdpw_wlr_output *wlr_output_chooser_default(struct wl_list *output_list) {
++	logprint(DEBUG, "wlroots: output chooser called");
++	struct xdpw_output_chooser default_chooser[] = {
++		{XDPW_CHOOSER_SIMPLE, "slurp -f %o -o"},
++		{XDPW_CHOOSER_DMENU, "wofi -d -n"},
++		{XDPW_CHOOSER_DMENU, "bemenu"},
++	};
++
++	int N = sizeof(default_chooser)/sizeof(default_chooser[0]);
++	struct xdpw_wlr_output *output;
++	for (int i = 0; i<N; i++) {
++		output = wlr_output_chooser(&default_chooser[i], output_list);
++		if (output != NULL) {
++			logprint(DEBUG, "wlroots: output chooser selects %s", output->name);
++			return output;
++		}
++	}
++	return NULL;
++}
++
++struct xdpw_wlr_output *xdpw_wlr_output_chooser(struct xdpw_screencast_context *ctx) {
++	if (ctx->state->config->screencast_conf.chooser_type == XDPW_CHOOSER_NONE) {
++		struct xdpw_wlr_output *output = NULL;
++		if (ctx->state->config->screencast_conf.output_name != NULL) {
++			output = xdpw_wlr_output_find_by_name(&ctx->output_list, ctx->state->config->screencast_conf.output_name);
++		}
++		if (output != NULL) {
++			return output;
++		}
++		return xdpw_wlr_output_first(&ctx->output_list);
++	} else {
++		struct xdpw_wlr_output *output;
++		if (ctx->state->config->screencast_conf.chooser_cmd != NULL) {
++			struct xdpw_output_chooser chooser = {
++				ctx->state->config->screencast_conf.chooser_type,
++				ctx->state->config->screencast_conf.chooser_cmd
++			};
++			logprint(DEBUG, "wlroots: output chooser %s (%d)", chooser.cmd, chooser.type);
++			output = wlr_output_chooser(&chooser, &ctx->output_list);
++			if (output != NULL) {
++				logprint(DEBUG, "wlroots: output chooser selects %s", output->name);
++				return output;
++			}
++			return NULL;
++		}
++		return wlr_output_chooser_default(&ctx->output_list);
++	}
++}
++
+ struct xdpw_wlr_output *xdpw_wlr_output_find_by_name(struct wl_list *output_list,
+ 		const char* name) {
+ 	struct xdpw_wlr_output *output, *tmp;

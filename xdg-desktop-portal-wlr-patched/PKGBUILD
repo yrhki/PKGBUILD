@@ -1,0 +1,41 @@
+# Maintainer: Christian Rebischke <chris.rebischke@archlinux.org>
+# Maintainer: Maxim Baz <$pkgname at maximbaz dot com>
+# Contributor: Stefan Tatschner <stefan@rumpelsepp.org>
+
+pkgname=xdg-desktop-portal-wlr-patched
+pkgver=0.2.0
+pkgrel=2
+pkgdesc='xdg-desktop-portal backend for wlroots with patches'
+url="https://github.com/emersion/xdg-desktop-portal-wlr"
+arch=('x86_64')
+license=('MIT')
+provides=('xdg-desktop-portal-impl')
+depends=('xdg-desktop-portal' 'pipewire')
+makedepends=('meson' 'wayland-protocols' 'wayland')
+conflicts=('xdg-desktop-portal-wlr' 'xdg-desktop-portal-wlr-git')
+source=(
+  "${pkgname}-${pkgver}::https://github.com/emersion/xdg-desktop-portal-wlr/archive/v${pkgver}.tar.gz"
+  "0001-graphical-display-chooser.patch::https://github.com/emersion/xdg-desktop-portal-wlr/pull/59.patch"
+)
+sha512sums=(
+    '9b01919b380510389710c005901810ac6fa00299f2b35a37fa949aab361438ab08c30fc95b88e1805dcea7e97ebe2d19111693f82eee545864077347d2659ca9'
+    '238a412ac18b797e6fa4d32658e1cb5f53e69710136e16d72c232855cd59b0a95b5532818b31dee588c351758e319590da20bd5b5e683e0dc6edb4ade070820a'
+)
+
+prepare() {
+	cd "${pkgname}-${pkgver}"
+    patch -p1 -i "${srcdir}/0001-graphical-display-chooser.patch"
+}
+
+build () {
+	cd "${pkgname}-${pkgver}"
+	arch-meson -Dsd-bus-provider=libsystemd build
+	ninja -C build
+}
+
+package () {
+	cd "${pkgname}-${pkgver}"
+	DESTDIR="${pkgdir}" ninja -C build install
+	install -Dm644 -t "$pkgdir/usr/share/licenses/${pkgname}" LICENSE
+}
+
