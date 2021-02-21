@@ -18,6 +18,8 @@ pkgver() {
 
 build() {
     cd "$srcdir/$pkgname"
+    export CARGO_HOME="$srcdir/$pkgname/cargo"
+
     cargo build --release --locked
 }
 
