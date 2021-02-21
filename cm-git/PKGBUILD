@@ -1,0 +1,27 @@
+pkgname=cm-git
+pkgver=r499.c75c9df
+pkgrel=1
+pkgdesc="Emacs' compilation-mode-like TUI application"
+url="https://github.com/tsoding/cm"
+arch=('x86_64')
+license=(MIT)
+depends=('pcre2' 'ncurses')
+makedepends=('rust')
+source=("${pkgname}::git+https://github.com/tsoding/cm")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "$srcdir/$pkgname"
+    printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+    cd "$srcdir/$pkgname"
+    cargo build --release --locked
+}
+
+package() {
+    cd "$srcdir/$pkgname"
+    install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm755 target/release/cm "$pkgdir"/usr/bin/cm
+}
