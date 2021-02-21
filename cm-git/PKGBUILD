@@ -1,5 +1,5 @@
 pkgname=cm-git
-pkgver=r499.c75c9df
+pkgver=0.1.0.r499.gc75c9df
 pkgrel=1
 pkgdesc="Emacs' compilation-mode-like TUI application"
 url="https://github.com/tsoding/cm"
@@ -9,10 +9,11 @@ depends=('pcre2' 'ncurses')
 makedepends=('rust')
 source=("${pkgname}::git+https://github.com/tsoding/cm")
 sha256sums=('SKIP')
+options+=(!debug strip)
 
 pkgver() {
     cd "$srcdir/$pkgname"
-    printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+    printf "%s.r%s.g%s" "$(grep '^version =' Cargo.toml|head -n1|cut -d\" -f2|cut -d\- -f1)" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
 build() {
